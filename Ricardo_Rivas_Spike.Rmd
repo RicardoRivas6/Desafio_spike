@@ -1,0 +1,859 @@
+---
+title: "Desafio_Spike"
+author: "Ricardo"
+date: "15 de octubre de 2019"
+output: html_document
+runtime: shiny
+---
+
+```{r setup, include=FALSE}
+library(knitr)
+library(plyr)
+library(dplyr)
+library(timeDate)
+library(lubridate)
+library(randomForest)
+library(ROCR)
+library(party)
+library(rpart)
+ ### Descripción de la data####
+  library(ggplot2)
+  #install.packages("ggThemeAssist")
+  library(ggThemeAssist)
+  #install.packages("colourpicker")
+  library(colourpicker)
+knitr::opts_chunk$set(echo = TRUE)
+
+caudal_extra_completo <- read.csv(file= "C:/Users/ricardo.rivas/Desktop/Desafio_Spike/caudal_extra.csv"
+                         ,header = TRUE
+                         ,sep= ",")
+##### Generando un DataSet del 10% de las variables con 20 estaciones.####
+caudal_extralist = split(caudal_extra_completo, caudal_extra_completo$codigo_estacion)
+# Se va a tomar un dataframe de las primeras 20 estaciones. que representan el 20% de los datos.
+
+caudal_extra = caudal_extralist[[1]]
+for( i in 2: 20){
+  caudal_extra = rbind(caudal_extra,caudal_extralist[[i]])
+}
+```
+
+## R Markdown
+
+Este Documento Corresponde al desafío Spike en donde se analizará un dataset para poder predecir caudales extremos para cuencas en Chile
+
+Para poder visualizar cuales son las variables del Dataset y poder optimizar la ejecucion de los codigos empleados, se ocupo un subconjunto de las cuencas. A continuación se muestra las 6 primeras filas del DataSet para una pequeña vista de la información .
+```{r , echo = FALSE}
+
+head(caudal_extra,6)
+
+```
+
+A medida que avance el documento se irán respondiendo las preguntas contenidas en el desafío, sin mostrar la totalidad del código. Se priorizará mostrar valores o gráficos que le den valor al informe.
+
+#Desarollo.
+
+ 2.- Analiza el dataset caudal_extra.csv. ¿Qué puedes decir de los datos, distribuciones, missing,u otros? ¿Hay algo que te llame la atención? ¿Por qué hay tantos valores missing? 
+
+  Para poder expresar una exploración de los datos se realizó un  ` summary(caudal_extra) ` el cual mostro los siguientes     resultados.
+```{r}
+summary(caudal_extra)
+```
+
+De esta exploración se observa que las variables que presentan missing son la temperatura y la precipitación. A continuación se da el detalle de cada una:
+
++ La variable Precipitaciones cuenta con  27.767 datos missing correspondiente a  1,97%.  
++ La variable Temperatura cuenta con 151.563 datos missing correspondiente a  10,74%.
+
+Estos valores missing, se deben a la manera en como se elaboró el Dataset. Si bien el caudal corresponde al de los poligonos de cuencas, el valor de la temperatura y de la precipitación corresponden al valor promedio de las mediciones de las estaciones que están dentro de este poligono, esto hace inferir que los valores missing se dan debido a que en ese momento no habían estaciones dentro del determinado poligono para que midiera temperatura o precipitación, provocando una falta de información y reflejandose en el dataSet como valores nulos.
+
+En cuanto  ala distribución de los datos, se realizó un Histograma para el Caudal, Temperatura máxima y Precipitaciones. 
+```{r ,echo=FALSE , warning=FALSE}
+
+
+  
+# Se observa la temp_max_promedio en forma de histograma, se puede apreciar 
+  CAUDAL <- caudal_extra$caudal
+  promedio = mean(CAUDAL, na.omit = TRUE)
+  mediana = median(CAUDAL, na.omit = TRUE)
+  grafico1 = ggplot(data = caudal_extra , aes(x = CAUDAL) )
+  grafico2= grafico1 + geom_histogram( aes(y = ..density..), #Para incluir la linea de densidad 
+                             bins = 20,
+                             color = "blue",
+                             fill = "red"
+  ) +
+    ggtitle(" Histograma Caudal") +
+    theme_light() + 
+    xlab("Caudal") +
+    xlim(0, 20)+
+    ylab("Frecuencia relativa") + 
+    geom_density( alpha = 0.5, # El alpha
+                  color = "black")
+  
+ par(mfrow=c(1,2))
+    plot(grafico2)
+    boxplot(caudal_extra$caudal, range = 3 , outline = FALSE)
+
+```
+ 
+Se puede observar a través de los gráficos que la variable caudal tiene una asimetría hacia la derecha, en donde se confirma con el boxplot que es una variable que posee la mayor cantidad acumulados en un principio. Esto se ve tambien con la linea del percentil 50 en donde claramente esta más cerca del percentil 25 que del 75.
+
+A continuación se mostrará los gráficos correspondiente a la temperatura
+
+```{r, echo=FALSE , warning=FALSE}
+
+temp_max_promedio_NONA <- caudal_extra$temp_max_promedio
+promedio = mean(temp_max_promedio_NONA, na.omit = TRUE)
+mediana = median(temp_max_promedio_NONA, na.omit = TRUE)
+grafico1 = ggplot(data = caudal_extra , aes(x = temp_max_promedio))
+grafico2= grafico1 + geom_histogram( aes(y = ..density..), #Para incluir la linea de densidad 
+                           bins = 40,
+                           color = "blue",
+                           fill = "red"
+) +
+  ggtitle(" Histograma Temp Max promedio") +
+  theme_light() + 
+  xlab("Temperatira Max Prom") +
+  ylab("Frecuencia relativa") + 
+  geom_density( alpha = 0.5, # El alpha
+                color = "black")
+
+ par(mfrow=c(1,2))
+    plot(grafico2)
+    boxplot(caudal_extra$temp_max_promedio, range = 3 , outline = FALSE)
+```
+
+
+Se puede observar a través de los gráficos una curva mucho más central que la variable caudal y que además la mayor cantidad de los datos se centrán en valores positivos.  Es por esto que con ayuda del BoxPlot, se confirma que es una curva similar a una normal pero trasladada a la derecha.
+
+Finalmente se muestra los gráficos correspondentes a la precipitación promedio
+
+```{r, echo=FALSE , warning=FALSE}
+precip_promedio_NONA <- na.omit(caudal_extra$precip_promedio)
+promedio = mean(precip_promedio_NONA, na.omit = TRUE)
+mediana = median(precip_promedio_NONA, na.omit = TRUE)
+grafico1 = ggplot(data = caudal_extra , aes(x = precip_promedio))
+grafico2= grafico1 + geom_histogram( aes(y = ..density..), #Para incluir la linea de densidad 
+                           bins = 20,
+                           color = "blue",
+                           fill = "red"
+) +
+  ggtitle(" Histograma Precipitación promedio") +
+  theme_light() + 
+  xlim(0, 50)+
+  ylim(0, 0.15)+
+  ylab("Frecuencia relativa") + 
+  geom_density( alpha = 0.5, # El alpha
+                color = "black")+
+  geom_vline(xintercept = promedio,
+             color = "black")+
+  geom_vline(xintercept = mediana,
+             color = "YELLOW")
+
+ par(mfrow=c(1,2))
+    plot(grafico2)
+    boxplot(caudal_extra$precip_promedio, range = 3 , outline = FALSE)
+
+```
+
+
+Se puede observar a través de los gráficos que la variable precipitación tiene una asimetría hacia la derecha, en donde se confirma con el boxplot que es una variable que posee la mayor cantidad acumulados en un principio. Esto se ve tambien en el boxplot, donde se eliminaron todos los outliers fuera de 3 IC y visualmente se ve como una linea gruesa, eso quiere decir que la mayoría de los datos tienen valores muy cercanos. 
+
+
+3.- Plots de precipitación, temperatura y caudal.
+
+ + A continuación se elaboró un gráfico dinámico en donde se puede ver la variable a gráficar según el código de la estación que el usuario elija.
+
+
+```{r, echo=FALSE, warning = FALSE}
+      
+estaciones= unique(caudal_extra$codigo_estacion)
+      selectInput(inputId = "Variable", label = strong("Variable a graficar"),
+                   choices = c("temp_max_promedio","precip_promedio","caudal"),
+                   selected = "temp_max_promedio")
+       
+       selectInput(inputId = "Estacion", label = strong("Codigo de Estacion"),
+                    choices = c(estaciones),
+                    selected = 1020003)
+ 
+
+
+```
+
+El gráfico se muestra a continuación.
+
+```{r , echo=FALSE, warning = FALSE}
+ renderPlot({
+    
+    # generate bins based on input$bins from ui.R
+    #x    <- faithful[, 2] 
+    #bins <- seq(min(x), max(x), length.out = input$bins + 1)
+    
+    # draw the histogram with the specified number of bins
+    #hist(x, breaks = bins, col = 'darkgray', border = 'white')
+    
+    if (input$Variable == "temp_max_promedio"){
+      datosTemp = caudal_extra[caudal_extra$codigo_estacion == input$Estacion , c("fecha_string_fecha","temp_max_promedio")]
+      
+    }else if (input$Variable == "precip_promedio"){
+      datosTemp = caudal_extra[caudal_extra$codigo_estacion == input$Estacion , c("fecha_string_fecha","precip_promedio")]
+      
+    }else {
+      datosTemp = caudal_extra[caudal_extra$codigo_estacion == input$Estacion , c("fecha_string_fecha","caudal")]
+    }
+    
+    datos = datosTemp[order(datosTemp$fecha_string_fecha),]
+    
+    plot(datos[,2],type = "l", main = paste("Grafico de ", input$Variable), x=datos$fecha_string_fecha , xlab= "Time")
+    
+  })
+```
+ 
+ 
+ + A continuación se muestra un gráfico de las tres variables en conjunto.
+
+
+```{r, echo=FALSE, warning = FALSE}
+      
+      estaciones= unique(caudal_extra$codigo_estacion)
+      
+       selectInput(inputId = "Estacion", label = strong("Codigo de Estacion"),
+                    choices = c(estaciones),
+                    selected = 1020003)
+ 
+
+
+```
+
+El gráfico se muestra a continuación.
+
+```{r , echo=FALSE, warning = FALSE}
+ renderPlot({
+   datosTemp = caudal_extra[caudal_extra$codigo_estacion == input$Estacion , c("fecha_string_fecha","caudal","precip_promedio","temp_max_promedio" )]
+    datosTemp = datosTemp[order(datosTemp$fecha_string_fecha),]
+    Datos.scaled =  scale(datosTemp[,2:4], center= TRUE, scale = TRUE)
+    
+    
+    plot(Datos.scaled[,1],type = "l", col="red" , ann = F, ylim = c(-25,25), x =datosTemp$fecha_string_fecha )
+    par(new=TRUE)
+    plot(Datos.scaled[,2],type = "l", col="blue" ,ann = F, ylim = c(-25,25), axes = FALSE) 
+    par(new=TRUE)
+    plot(Datos.scaled[,3],type = "l", col="black" ,ann = F, ylim = c(-25,25), axes = FALSE) 
+  
+    
+  })
+```
+ 
+ 
+ 4.- Crear 3 Variables para el caso Extremo de Caudal, Temperatura y precipitaciones
+ 
+ En primer lugar se crearon las variables que describieran las las estaciones del año según corresponda.
+ + Verano : 22 Dic - 21 Mar.
+ + Otono : 22 Mar - 21 Jun.
+ + Invierno: 22 Jun - 21 Sept.
+ + Primavera : 22 Sept - 21 Dic.
+ 
+ Se muestra el total para cada una de las estaciones.
+```{r, echo=FALSE , warning=FALSE}
+
+caudal_extra$ano =as.numeric(year(caudal_extra$fecha))
+caudal_extra$mes =as.numeric(month(caudal_extra$fecha))
+caudal_extra$dia = as.numeric(day(caudal_extra$fecha))
+
+
+caudal_extra$fecha_string = as.character(caudal_extra$fecha)
+
+caudal_extra$fecha_string = substr(caudal_extra$fecha_string
+                            ,1
+                            ,10)
+# Se obtendra un formato de fecha para la fecha que estaba como factor.
+caudal_extra$fecha_string_fecha=  as.Date(caudal_extra$fecha_string, format = "%Y-%m-%d")
+caudal_extra$ANO_MES_DIA= paste(caudal_extra$ano,"-",caudal_extra$mes,"-",caudal_extra$dia)
+
+# Tabla auxiliar para poder cruzar el ano mes dia con la fecha en formato fecha. se ocupara más adelante
+fecha_anomesdia = ddply(caudal_extra
+                       , .(ANO_MES_DIA)
+                       , summarize 
+                       ,FECHA= max(fecha_string_fecha)
+                       
+)
+
+
+# Se creará la variable estación
+caudal_extra$Estacion= c()
+caudal_extra$Estacion[(caudal_extra$mes==1)] = "Verano"
+caudal_extra$Estacion[(caudal_extra$mes==2)] = "Verano"
+caudal_extra$Estacion[(caudal_extra$mes==3 & caudal_extra$dia <21)] = "Verano"
+caudal_extra$Estacion[(caudal_extra$mes==3 & caudal_extra$dia >20)] = "Otono"
+caudal_extra$Estacion[(caudal_extra$mes==4)] = "Otono"
+caudal_extra$Estacion[(caudal_extra$mes==5)] = "Otono"
+caudal_extra$Estacion[(caudal_extra$mes==6 & caudal_extra$dia <21)] = "Otono"
+caudal_extra$Estacion[(caudal_extra$mes==6 & caudal_extra$dia >20)] = "Invierno"
+caudal_extra$Estacion[(caudal_extra$mes==7)] = "Invierno"
+caudal_extra$Estacion[(caudal_extra$mes==8)] = "Invierno"
+caudal_extra$Estacion[(caudal_extra$mes==9 & caudal_extra$dia <21)] = "Invierno"
+caudal_extra$Estacion[(caudal_extra$mes==9 & caudal_extra$dia >20)] = "Primavera"
+caudal_extra$Estacion[(caudal_extra$mes==10)] = "Primavera"
+caudal_extra$Estacion[(caudal_extra$mes==11)] = "Primavera"
+caudal_extra$Estacion[(caudal_extra$mes==12 & caudal_extra$dia <21)] = "Primavera"
+caudal_extra$Estacion[(caudal_extra$mes==12& caudal_extra$dia >20)] = "Verano"
+
+# Se ve una tabla de ocntigencia de la variable Estación
+table(caudal_extra$Estacion)
+
+# Se va a crear las 3 variables llamadas Extremas
+
+#Caudal Extremo
+Extremo_Caudal = ddply(caudal_extra
+                         , .(Estacion)
+                         , summarize 
+                         ,Percentil95_Caudal= quantile(caudal,0.95)
+                                         
+)
+
+#Precip Extremo
+Extremo_Precip = ddply(caudal_extra
+                       , .(Estacion)
+                       , summarize 
+                       ,Percentil95_Precip= quantile(precip_promedio,0.95, na.rm = TRUE)
+                       
+)
+#Temp Extremo
+Extremo_Temp = ddply(caudal_extra
+                       , .(Estacion)
+                       , summarize 
+                       ,Percentil95_temp= quantile(temp_max_promedio,0.95, na.rm = TRUE)
+                       
+)
+
+# Se va a unir estos 3 valores al DataSET CON LA INFORMACION
+caudal_extra_2 = merge(caudal_extra, Extremo_Caudal,
+                     by.x ="Estacion",
+                     by.y = "Estacion",
+                     all = TRUE)
+caudal_extra_2 = merge(caudal_extra_2, Extremo_Precip,
+                     by.x ="Estacion",
+                     by.y = "Estacion",
+                     all = TRUE)
+caudal_extra_2 = merge(caudal_extra_2, Extremo_Temp,
+                     by.x ="Estacion",
+                     by.y = "Estacion",
+                     all = TRUE)
+
+#Se borrarán los valores nulos ya que ose tiene medición de estos datos.
+caudal_extra_2 = caudal_extra_2[!is.na(caudal_extra_2$temp_max_promedio),]
+caudal_extra_2 = caudal_extra_2[!is.na(caudal_extra_2$precip_promedio),]
+
+#Se observa que si el valor es mayor al 95% de los casos se obtiene un 1, CREANDOSE FINALMENTE LAS 3 VARIABLES
+caudal_extra_2$Caudal_extremo[(caudal_extra_2$caudal> caudal_extra_2$Percentil95_Caudal)] = 1
+caudal_extra_2$Caudal_extremo[(caudal_extra_2$caudal<= caudal_extra_2$Percentil95_Caudal)] = 0
+
+caudal_extra_2$Temp_extremo[(caudal_extra_2$temp_max_promedio> caudal_extra_2$Percentil95_temp)] = 1
+caudal_extra_2$Temp_extremo[(caudal_extra_2$temp_max_promedio<= caudal_extra_2$Percentil95_temp)] = 0
+
+caudal_extra_2$Precip_extremo[(caudal_extra_2$precip_promedio> caudal_extra_2$Percentil95_Precip)] = 1
+caudal_extra_2$Precip_extremo[(caudal_extra_2$precip_promedio<= caudal_extra_2$Percentil95_Precip)] = 0
+
+caudal_extra_2$Conteo = 1 
+
+```
+ 
+ En la pregunta se pide obtener el umbral del percentil 95% para cada variable. A continuación se muestra el valor de ese umbral para cada variable por estación del año. 
+ 
+ 
+ + Caudal
+ 
+```{r}
+head(Extremo_Caudal,4)
+```
+ + Temperatura
+```{r}
+head(Extremo_Temp,4)
+```
+
+ + Precipitación
+```{r}
+
+head(Extremo_Precip,4)
+```
+ 
+La pregunta hace referencia a si se está de acuerdo con el valor "Extremo" que corresponde a un valor que sobrepaso el percentil 95%. La verdad si estoy de acuerdo, ya que es un parámetro que hace que solo un 5% de los valores sean extremos, independiente del mustreo, por lo que es un valor realmente atípico. Un punto que podría replantearse es que al ser un percentil propio de la muestra, a medida que pasa el tiempo, este valor se va a ir moviendo o "actualizando" dependiendo de como se muestre la realidad y se vaya agregando mayor información o nuevas medidas, por lo que un valor extremo hoy podría no ser extremo en 3 o 4 estaciones más. Esto es un punto a pensar ya que por ejemplo a mi gusto 45 grados de temperatura, podrían provocar deshidratación, independiente si con el tiempo se ha convertido en un valor por debajo del percentil 95. Sin emabargo como primera definición para realizar el modelo, me parece bien.
+
+No me considero experto en en este tema en particular, sin embargo creo que podría mezclarse el valor de algún percentil, con la consecuencia de dicho valor extremo. Por ejemplo ir a consultar a un doctor (o algún experto) que temperatura provoca deshidratación, o a que temperatura hay una probabilidad X de que ocurra un incendio, y tomar ese valor como un umbral potencialmente, mientras se obtiene otra información para discutir que criterio es mejor para definir 'Extremo'.
+
+
+5.- Analice la variable Caudal_extremo. 
+
+ Para analizar la variable Caudal_extremo en diferentes cuencas, se realizó un gráfico con la frecuencia de este evento en cada cuenca de la muestra. Para mejorar la visualización de los gráficos, no se colocó el nombre de las cuencas, si no que un índice.
+```{r , echo=FALSE}
+Caudal_extremo_cuenca = ddply( caudal_extra_2
+                  , .(nombre)
+                  , summarize 
+                  ,FrecCaudal_extremo = sum(Caudal_extremo)
+                  ,ConteoCasosCuenca = sum(Conteo)                 
+)
+Caudal_extremo_cuenca$Porc = 100*Caudal_extremo_cuenca$FrecCaudal_extremo/Caudal_extremo_cuenca$ConteoCasosCuenca
+#SE GRAFICA ESA FRECUENCIA.
+plot(Caudal_extremo_cuenca$Porc, ylab = "Porcentaje de Caudal Extremo")
+```
+
+Se puede apreciar del gráfico que de las 20 Cuencas (que se tomaron como muestra), un valor cercano al 75% ha tenido menos del 5% de ocurrencia del Caudal Extremo. Además ninguno sobrepasa el 20% de ocurrencia, esto hace inferir que el modelo de predicción que se hará más adelante, tendrá información totalmente desbalanceada, por lo que se tendrá que manejar la data de una manera especial para no perder ni subestimar información.
+
+
+6.- Hacer un Plot del Porcentaje de eventos extremos a través del tiempo. 
+
+Para enfrentar esta pregunta, se utilizó la frecuencia mensual como medida del tiempo, ya que se piensa que otorga mayor claridad al momento de la visualización. Al ser diario podía ser más confuso y mucho más entorpecido el anális.
+
+
+```{r, echo=FALSE, warning=FALSE}
+# Creo el ID para poder ocupar la tabla temporal y graficar temporalmente
+caudal_extra_2$ANO_MES_DIA= paste(caudal_extra_2$ano,"-",caudal_extra_2$mes,"-",caudal_extra_2$dia)
+
+# oBTENGO LA FRECUENCIA DIARIA DE EVENTOS
+Tabla_CompTemporal = ddply( caudal_extra_2
+                               , .(ANO_MES_DIA)
+                               , summarize 
+                               ,FrecCaudal_extremo = sum(Caudal_extremo)
+                               ,FrecTemp_extremo = sum(Temp_extremo)
+                               ,FrecPrecip_extremo = sum(Precip_extremo)
+                                ,ConteoCasosCuenca = sum(Conteo)                 
+)
+
+# Obtendo la frecuencia diaria en porcentaje
+Tabla_CompTemporal$PorcCaudal_extremo= 100*Tabla_CompTemporal$FrecCaudal_extremo/Tabla_CompTemporal$ConteoCasosCuenca
+Tabla_CompTemporal$PorcTemp_extremo= 100*Tabla_CompTemporal$FrecTemp_extremo/Tabla_CompTemporal$ConteoCasosCuenca
+Tabla_CompTemporal$PorcPrecip_extremo= 100*Tabla_CompTemporal$FrecPrecip_extremo/Tabla_CompTemporal$ConteoCasosCuenca
+
+#Ocupo la tabla auxiliar para poder obtener en formato fecha
+Tabla_CompTemporal2_dia = merge(Tabla_CompTemporal, fecha_anomesdia,
+                       by.x ="ANO_MES_DIA",
+                       by.y = "ANO_MES_DIA",
+                       all.x =   TRUE)
+
+#Agrupo ahora por mes y ano para tenre una visión mucho más clara y global que la que me pueda dar
+# un análisis diario.
+Tabla_CompTemporal3 = ddply( Tabla_CompTemporal2_dia
+                            , .(year (FECHA), month(FECHA))
+                            , summarize 
+                            ,FrecCaudal_extremo = sum(FrecCaudal_extremo)
+                            ,FrecTemp_extremo = sum(FrecTemp_extremo)
+                            ,FrecPrecip_extremo = sum(FrecPrecip_extremo)
+                            ,ConteoCasosCuenca = sum(ConteoCasosCuenca)                 
+)
+
+
+Tabla_CompTemporal3$PorcCaudal_extremo= 100*Tabla_CompTemporal3$FrecCaudal_extremo/Tabla_CompTemporal3$ConteoCasosCuenca
+Tabla_CompTemporal3$PorcTemp_extremo= 100*Tabla_CompTemporal3$FrecTemp_extremo/Tabla_CompTemporal3$ConteoCasosCuenca
+Tabla_CompTemporal3$PorcPrecip_extremo= 100*Tabla_CompTemporal3$FrecPrecip_extremo/Tabla_CompTemporal3$ConteoCasosCuenca
+
+```
+
+En este item se van a mostrar los gráficos de las variables a través del tiempo. Además se mostrará un gráfico que muestra la descomposición de esta variable como serie temporal. Estas componentes son la tendencia a través del tiempo, estacionalidad y aleatoriedad.
+
+Se realizó esta descomposición, porque es mucho más visible la tendencia y facilita el analisis.
+
++ En primer lugar se mostrará el porcentaje del Caudal extremo a través del tiempo.
+
+```{r , echo=FALSE, warning=FALSE}
+x= Tabla_CompTemporal3$PorcCaudal_extremo
+x=ts(x,start=c(1960,1),frequency = 12)
+#El comando ts pide, la base de datos, donde parte en 1959 en el mes 1 y la frecuencia es 12 meses
+par(mfrow=c(1,2))
+plot(x , main= "Caudal Extremo" ,ylab="% de Ocurrencia" , xlab = "time")
+plot(decompose(x))
+```
+
+Como se puede ver en el grafico, la tendencia presenta una disminución, es decir a diminuído a través del tiempo la presencia de eventos extremos.Si bien se presentan ciertos peaks de ocurrencia, tiene que ver con la estacionalidad (season). Además se puede apreciar que la variabilidad o elemento aleatorio de esta serie temporal, ha ido estabilizándose, incluso teniendo peaks de aleatoriedad mucho menos pronunciados.
+
++ En Segundo lugar se mostrará el porcentaje de la temperatura extrema a través del tiempo.
+ 
+
+```{r , echo=FALSE, warning=FALSE}
+x= Tabla_CompTemporal3$PorcTemp_extremo
+x=ts(x,start=c(1960,1),frequency = 12)
+#El comando ts pide, la base de datos, donde parte en 1959 en el mes 1 y la frecuencia es 12 meses
+par(mfrow=c(1,2))
+plot(x , main= "Temperatura Extrema" ,ylab="% de Ocurrencia" , xlab = "time")
+plot(decompose(x) )
+```
+
+Como se puede ver en el grafico, la tendencia presenta una disminución que incluso ya está estable. La presencia de estos eventos disminuyó y cada vez es menos común. Como se puede ver en casi toda el gráfico de descomposición, esta variable se estabilizó y cada vez hay menos eventos extremos. 
+
+
++ En Tercer lugar se mostrará el porcentaje de la Precipitación extrema a través del tiempo.
+
+```{r, echo=FALSE}
+x= Tabla_CompTemporal3$PorcPrecip_extremo
+x=ts(x,start=c(1960,1),frequency = 12)
+#El comando ts pide, la base de datos, donde parte en 1959 en el mes 1 y la frecuencia es 12 meses
+par(mfrow=c(1,2))
+plot(x , main= "Precipitacion Extrema" ,ylab="% de Ocurrencia" , xlab = "time")
+plot(decompose(x))
+```
+
+Como se puede ver en el grafico, al contrario de estas dos, la tendencia es que ha ido aumentando la ocurrenia de estos eventos extremos, por lo que cada vez se hace más común. 
+
+7.- Realizar Predicción de Caudal Extremo. 
+Al hacer las primeras pruebas de modelo se encontró que utilizar la información del día anterior o de la semana anterior, era indirectamente, estar utilizando información demasiado relevante para el futuor, por lo que se concluyó que no tiene sentido ocupar la información más cercana a la fecha a predecir , ya que la misma prediccón pierde valor y no va a haber tiempo de realizar acciones realmente concretas.. 
+
+Como objetivo, se propuso predecir la ocurrencia de un Caudal extremo de un día pero con la información de 45 a 30 días antes del día de ocurrencia, es decir, con un mes de anticipación.
+
+En primer lugar se va a ver que hay variables en el dataset que no  se van a ocupar en el modelo porque no tienen relevancia, entre ellas el "X", "Institución", "Fuente". Además hay valores que son redundantes como el nombre del gauge y el gauge_id, entre otros.
+
+Además al tomar la información de 15 días, se realizó una agrupación de datos, por lo que se crearon diferentes variables entre ellas. 
+
++SUMPrimavera: Cuantos de esos 15 dias corresponden a días de primavera.
++SUMInvierno: Cuantos de esos 15 dias corresponden a días de Invierno.
++SUMOtono: Cuantos de esos 15 dias corresponden a días de Otono.
++SUMVerano: Cuantos de esos 15 dias corresponden a días de Verano.
++Temp_Max: Temperautra promedio máxima medida en esos 15 dias.
++Temp_Min: Temperautra promedio mínima medida en esos 15 dias.
++Temp_Prom: Temperautra promedio promedio medida en esos 15 dias.
++Precip_max: Precipitación  máxima medida en esos 15 dias.
++Precip_Min: Precipitación  mínima medida en esos 15 dias.
++Precip_Prom: Precipitación promedio medida en esos 15 dias.
++Caudal_max: Caudal máxima medida en esos 15 dias.
++Caudal_Min: Caudal mínima medida en esos 15 dias.
++Caudal_Prom: Caudal promedio medida en esos 15 dias.
++SUMPrecip_Extre: Sumatoria de días con Precipitación extrema en esos 15 dias.
++SUMTemp_extremo: Sumatoria de días con Temperautra extrema en esos 15 dias.
++SUMCaudal_extremo: Sumatoria de días con Caudal extrema en esos 15 dias.
++Estacion : Estación del año a la cual va a pertenecer el día a predecir, que si bien es una variable del futuro, yo ya la se previamente.
+
+* Nota: La idea era tomar la información acumulada de 30 días, sin embargo afectabael rendimiento en la agrupación de información, es por esto que se hizo con 15 días. Lo importante que la información a predecir es de un mes en el futuro con la información de los últimos 15 días.
+
+Para la predicción se utilizo un RandomForest, Se crearon las nuevas variables antes mencionadas. A continuación se ven las primeas filas del DataSet incluyendo esas variables.
+
+```{r, echo = FALSE, warning= FALSE}
+
+#Se va a crear un ID para ocuparlo más adelante
+caudal_extra_2$id_cuenca_fecha = paste(caudal_extra_2$codigo_estacion, 
+                             caudal_extra_2$nombre,
+                             caudal_extra_2$fecha_string_fecha)
+
+# Se va a obtener de imediato las variables para crear el data_modelo del final.
+
+#Se va a tomar a información de 7 días antes para poder obtener la del día siguiente,
+# es por esto que se va a hacer 2 tablas temporales, una con la información de cada día
+# que al momento se va a agrupar, y la otra con la target y la estación de la fecha a predecir. 
+
+#1.- Al hacer el Cruce, todas las variables se tienen que cruzar con el valor de id_cuenca_fecha
+# y hacer la agrupacón por id_cuenca_fecha
+Info_dia_ant = caudal_extra_2[,c("id_cuenca_fecha",
+                                 "codigo_estacion",
+                                 "Estacion",
+                                 "altura",
+                                 "caudal",
+                                 "precip_promedio",
+                                 "temp_max_promedio",
+                                 "Caudal_extremo",
+                                 "Temp_extremo",
+                                 "Precip_extremo",
+                                 "Conteo"
+  
+  
+)]
+
+
+#2.- La target tiene y la información de la estación actual 
+# tienen que estar con la id_cuenca_fecha_hoy
+Estacion_Target = caudal_extra_2[,c("id_cuenca_fecha",
+                                    "fecha_string_fecha",
+                                    "Estacion",
+                                    "Caudal_extremo")
+                                 ]
+
+## lUEGO SE PREPARA EL DATASET PARA EL MODELO
+
+#Se va a utlizar una tabla auxiliar para obtener la data de 7 días antes de esta manera a la fecha de hoy 
+# la vamos a multiplicar por las fechas hasta 7 días antes y a ese le vamos a pegar as variables a agrupar
+# Posteriormente se va a pegar la tabla auxiliar del targey para generar el dataset del modelo
+
+
+
+ Periodo = c("1 Semana", 
+             "1 Semana", 
+             "1 Semana", 
+             "1 Semana", 
+             "1 Semana", 
+             "1 Semana", 
+             "1 Semana", 
+             "1 Semana", 
+             "1 Semana", 
+             "1 Semana", 
+             "1 Semana", 
+             "1 Semana", 
+             "1 Semana", 
+             "1 Semana", 
+             "1 Semana", 
+             "1 Semana"
+ )
+ Resta = c(-30,
+           -31,
+           -32,
+           -33,
+           -34,
+           -35,
+           -36,
+           -37,
+           -38,
+           -39,
+           -40,
+           -41,
+           -42,
+           -43,
+           -44,
+           -45)
+ Agrupacion_dias = data.frame(cbind(Periodo,Resta))
+
+# Union para la agrupaion 
+caudal_extra_2_Modelo = merge( caudal_extra_2, Agrupacion_dias,
+                               by = NULL,
+                               all.x= TRUE
+                               
+)
+# Genero las fechas de los dpias anteriores para la agrupacion
+caudal_extra_2_Modelo$fechaIntervalo =caudal_extra_2_Modelo$fecha_string_fecha + caudal_extra_2_Modelo$Resta
+
+# Este es el id_ del dia anterior para pegar las ariables a agrupar.
+caudal_extra_2_Modelo$id_cuenca_fecha = paste(caudal_extra_2_Modelo$codigo_estacion, caudal_extra_2_Modelo$nombre,caudal_extra_2_Modelo$fechaIntervalo)
+
+# Este es el id para eldia actual y se va a utilizar para pegar la tabla auxiliar de la target
+caudal_extra_2_Modelo$id_cuenca_fecha_hoy = paste(caudal_extra_2_Modelo$codigo_estacion, caudal_extra_2_Modelo$nombre,caudal_extra_2_Modelo$fecha_string_fecha)
+
+
+#Finalmente tenemos ambas fechas y empezamos a crear el datamodelo
+caudal_extra_2_variables = caudal_extra_2_Modelo[, c("id_cuenca_fecha_hoy", "id_cuenca_fecha")]
+
+
+
+# Unimos toda la información de los dias anteriores
+Data_Agrupado = merge( caudal_extra_2_variables, Info_dia_ant,
+                               by = "id_cuenca_fecha",
+                               all.x= TRUE
+                         
+)
+
+# Borramos los valores nulos
+Data_Agrupado <- Data_Agrupado[complete.cases(Data_Agrupado), ]
+
+# Obtenemos las estaciones de los dias anteriores y contamos
+# el numero de dias que hubo Verano , Primavera
+Data_Agrupado$ConteoVerano[Data_Agrupado$Estacion == "Verano"] = 1 
+Data_Agrupado$ConteoVerano[Data_Agrupado$Estacion != "Verano"] = 0 
+
+Data_Agrupado$ConteoOtono[Data_Agrupado$Estacion == "Otono"] = 1 
+Data_Agrupado$ConteoOtono[Data_Agrupado$Estacion != "Otono"] = 0 
+
+Data_Agrupado$ConteoInvierno[Data_Agrupado$Estacion == "Invierno"] = 1 
+Data_Agrupado$ConteoInvierno[Data_Agrupado$Estacion != "Invierno"] = 0 
+
+Data_Agrupado$ConteoPrimavera[Data_Agrupado$Estacion == "Primavera"] = 1 
+Data_Agrupado$ConteoPrimavera[Data_Agrupado$Estacion != "Primavera"] = 0 
+
+
+#Se agrupa la data de los dias anteriores
+Data_Agrupado_2 = ddply( Data_Agrupado
+                                 , .(id_cuenca_fecha_hoy)
+                                 , summarize 
+                                 , SUMPrimavera = sum(ConteoPrimavera)
+                                 , SUMInvierno = sum(ConteoInvierno)
+                                 , SUMOtono = sum(ConteoOtono)
+                                 , SUMVerano = sum(ConteoVerano)
+                                 , Temp_Max = max(temp_max_promedio)
+                                 , Temp_Min = min(temp_max_promedio)
+                                 , Temp_Prom = mean(temp_max_promedio)
+                                 , precip_max= max(precip_promedio)
+                                 , precip_Min = min(precip_promedio)
+                                 , precip_Prom = mean(precip_promedio)
+                                 , Caudal_max= max(caudal)
+                                 , Caudal_Min = min(caudal)
+                                 , Caudal_Prom = mean(caudal)
+                                 , altura_max= max(altura)
+                                 , altura_Min = min(altura)
+                                 , altura_Prom = mean(altura)
+                                 , SUMPrecip_Extre = sum(Precip_extremo)
+                                 , SUMTemp_extremo = sum(Temp_extremo)
+                                 , SUMCaudal_extremo= sum(Caudal_extremo)
+)
+
+
+## Ahora le pego la target DEL DÍA DE HOY.
+
+datomodelo = merge( Data_Agrupado_2, Estacion_Target,
+                       by.x = "id_cuenca_fecha_hoy",
+                       by.y = "id_cuenca_fecha",
+                       all.x= TRUE
+                    )
+
+
+datomodelo2 = datomodelo[,-1]
+datomodelo2 = datomodelo2[,-20]
+datomodelo2 = datomodelo2[,-c(14:16)]
+
+
+#viendo las clases de la data 
+
+datomodelo2$Estacion = as.factor(datomodelo2$Estacion)
+datomodelo2$Caudal_extremo = as.factor(datomodelo2$Caudal_extremo)
+
+head(datomodelo2,6)
+```
+
+Como se puede ver se realizó una Train y un Test con las mismas proporciones
+
+```{r, echo = FALSE, warning= FALSE}
+set.seed(123) ##For reproducibility
+
+datomodelotARGET0 = datomodelo2[datomodelo2$Caudal_extremo == 0,]
+datomodelotARGET1 = datomodelo2[datomodelo2$Caudal_extremo == 1,]
+n0<-nrow(datomodelotARGET0)
+n1<-nrow(datomodelotARGET1)
+
+trainIndex0<-sample(1:n0,size=round(0.3*n0),replace=F)
+trainIndex1<-sample(1:n1,size=round(0.3*n1),replace=F)
+
+train.s0<-data.frame(datomodelotARGET0[trainIndex0,])
+test.s0<-data.frame(datomodelotARGET0[-trainIndex0,])
+
+train.s1<-data.frame(datomodelotARGET1[trainIndex1,])
+test.s1<-data.frame(datomodelotARGET1[-trainIndex1,])
+
+train_s<- rbind(train.s0,train.s1)
+test_s<-rbind(test.s0,test.s1)
+
+table(train_s$Caudal_extremo)
+table(test_s$Caudal_extremo)
+
+
+```
+
+Al ser un modelo con variables desbalanceadas, se realizará el metódo de igualar los pesos, de esta menra no estaremos eliminando información que pueda ser relevante.
+
+```{r, echo = FALSE, warning= FALSE}
+##### Modelo random forest con peso ####
+Peso_0 = 100*nrow(train.s0)/nrow(train_s)
+Peso_1 = 100*nrow(train.s1)/nrow(train_s)
+
+#######randomForest library#######
+
+set.seed(123)
+rf.1<-randomForest(train_s[,18] ~ .,
+                   data=train_s[,1:17],
+                   mtry=6,
+                   importance=T,
+                   ntree=100,
+                   classwt= c(Peso_0, Peso_1)
+                   ) ##mtry= number of predictors, ntree=number of trees. mtry by default is m=p/3.
+
+
+
+```
+
+Se muestra la medida del Exactitud y Precisión del modelo, se ven a continuación.
+
+```{r, echo = FALSE, warning= FALSE}
+##Plot of error rates
+
+
+rf.pred<-predict(rf.1,test_s[,1:17],type="class")
+
+tab.1= table(rf.pred,test_s[,18])## Confusion matrix
+(tab.1[1,1]+tab.1[2,2])/sum(tab.1) #Exactitud
+ tab.1[2,2]/(tab.1[2,1]+tab.1[2,2]) #Precision                        
+# tab.1[2,2]/(tab.1[1,2]+tab.1[2,2]) #Exhaustividad
+```
+
+Para saber cuales fueron las variables que más influyeron en el modelo, se muestra un gráfico de importancia.
+
+
+```{r, echo = FALSE, warning= FALSE}
+
+importance(rf.1, type=2)
+
+varImpPlot(rf.1,type=1)
+
+
+```
+
+A continuación se muestra la Curva de ROC con el Área bajo la Curva
+
+```{r, echo = FALSE, warning= FALSE}
+
+##Graficar la Curva de ROC Y EL ÁREA AUC.
+predict.rpart <- predict(rf.1,test_s,type = "prob")[,2] #prob. clase=yes
+predict.rocr  <- prediction (predict.rpart,test_s$Caudal_extremo)
+perf.rocr     <- performance(predict.rocr,"tpr","fpr") #True y False postivie.rate
+auc <- as.numeric(performance(predict.rocr ,"auc")@y.values)
+
+```
+
+```{r, echo = FALSE, warning= FALSE}
+plot(perf.rocr,type='o', main = paste('Area Bajo la Curva =',round(auc,2)))  
+abline(a=0, b= 1)
+
+```
+
+Enseguida se muestra la curva de lift, que es un indicador el cual denota el comportamiento de la muestra a medida que se va empeorando "la probabilidad de predicción del sucueso", es decir mientrás mayor sea el tamaño de la muestra, tendería a bajar el indicador de lift ( cuantas veces mejor que el azar) hasta llegar al 100% de la muestra, por eso es una curva decreciente.
+
+```{r, echo = FALSE, warning= FALSE}
+# Load the kyphosis data set.
+
+perf <- performance(predict.rocr,"lift","rpp")
+plot(perf, main="lift curve", colorize=T)
+```
+ 
+ 
+```{r, echo = FALSE, warning= FALSE}
+Tabla_liftComparar = data.frame(cbind(test_s$Caudal_extremo,rf.pred,predict.rpart ))
+Tabla_liftComparar  = Tabla_liftComparar[order(Tabla_liftComparar$predict.rpart, decreasing = TRUE),]
+
+Tabla_liftComparar$Apuntado[Tabla_liftComparar$V1 == Tabla_liftComparar$rf.pred] = 1
+Tabla_liftComparar$Apuntado[Tabla_liftComparar$V1 != Tabla_liftComparar$rf.pred] = 0
+
+Tabla_liftComparar$conteo = 1
+
+Tabla_liftComparar$Evento[Tabla_liftComparar$V1 == 2] = 1 
+Tabla_liftComparar$Evento[Tabla_liftComparar$V1 == 1] = 0
+
+Total_eventos = sum(Tabla_liftComparar$Evento)
+contador = 1
+for (i in 1:nrow(Tabla_liftComparar)){
+  if(Tabla_liftComparar$Evento[i] == 1){
+    Tabla_liftComparar$Acumulado_Fuga[i] = contador
+    contador = contador+1
+  }else if(Tabla_liftComparar$Evento[i] == 0){
+    Tabla_liftComparar$Acumulado_Fuga[i] = contador
+    contador = contador
+  }
+}
+```
+
+EL 70% de los eventos Fuga corresponde a: 
+
+```{r, echo = FALSE, warning= FALSE}
+Numero_fuga = round(0.7* max(Tabla_liftComparar$Acumulado_Fuga),0)
+```
+
+En donde el valor de Precisión, exactitud y exhaustividad es son de:
+```{r, echo = FALSE, warning= FALSE}
+
+Tablalift70 = Tabla_liftComparar[Tabla_liftComparar$Acumulado_Fuga<Numero_fuga,]
+nrow(Tablalift70)
+
+porc_muestra = 100*nrow(Tablalift70)/nrow(Tabla_liftComparar)
+
+tab.2= table(Tablalift70$V1,Tablalift70$rf.pred)## Confusion matrix
+
+tab.2[2,1]/sum(tab.2) #Exactitud
+tab.2[2,1]/sum(tab.2) #Precision                       
+# tab.2[2,1]/tab.2[2,1] #Exhaustividad
+
+
+```
+
+ 
+Finalmente se concluye que al tomar seleccionar la base según la probablidad, es decir (dataset suponiendo la curva de lift) se obtiene una menor Exactitud, debido a los Verdaderos negativos,sin embargo la precisión aumenta, es decir, se sacrifica predecir correctamente una verdaderos negativos por falsos Positivos y se aumenta la exactitud de la base.
+
+Además en el mejor 2,3% de la base se obtiene una precisión del 93% . Si hacemos un análisis duro y tomamos una decisión al azar, en ese 2,3% debería apuntarle solo a un valor cercano al 3% (que es el valor que corresponde a la cantidad de datos de éxito de la base) mientras que con este método, el 93% correspondería a valores de éxito, por lo que tendría un valor de lift alto (como se aprecia en la gráfica)
+
+
